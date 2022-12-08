@@ -28,7 +28,7 @@ import androidx.core.content.FileProvider;
 import androidx.exifinterface.media.ExifInterface;
 
 import org.telegram.messenger.AndroidUtilities;
-import org.telegram.messenger.BuildConfig;
+import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.ImageLoader;
@@ -37,6 +37,7 @@ import org.telegram.messenger.ImageReceiver;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MediaController;
 import org.telegram.messenger.MessageObject;
+import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
@@ -49,6 +50,8 @@ import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.BottomSheet;
+import org.telegram.ui.ActionBar.Theme;
+import org.telegram.ui.BasePermissionsActivity;
 import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.PhotoAlbumPickerActivity;
 import org.telegram.ui.PhotoCropActivity;
@@ -64,6 +67,11 @@ import kotlin.Unit;
 import tw.nekomimi.nekogram.ui.BottomBuilder;
 
 public class ImageUpdater implements NotificationCenter.NotificationCenterDelegate, PhotoCropActivity.PhotoEditActivityDelegate {
+    private final static int ID_TAKE_PHOTO = 0,
+            ID_UPLOAD_FROM_GALLERY = 1,
+            ID_SEARCH_WEB = 2,
+            ID_REMOVE_PHOTO = 3,
+            ID_RECORD_VIDEO = 4;
 
     public BaseFragment parentFragment;
     private ImageUpdaterDelegate delegate;
@@ -381,7 +389,7 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
                         didSelectPhotos(media);
 
                         if (button != 8) {
-                            chatAttachAlert.dismiss();
+                            chatAttachAlert.dismiss(true);
                         }
                         return;
                     } else {
@@ -451,10 +459,10 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
                 if (info.searchImage.photo != null) {
                     TLRPC.PhotoSize photoSize = FileLoader.getClosestPhotoSizeWithSize(info.searchImage.photo.sizes, AndroidUtilities.getPhotoSize());
                     if (photoSize != null) {
-                        File path = FileLoader.getPathToAttach(photoSize, true);
+                        File path = FileLoader.getInstance(currentAccount).getPathToAttach(photoSize, true);
                         finalPath = path.getAbsolutePath();
                         if (!path.exists()) {
-                            path = FileLoader.getPathToAttach(photoSize, false);
+                            path = FileLoader.getInstance(currentAccount).getPathToAttach(photoSize, false);
                             if (!path.exists()) {
                                 path = null;
                             }
@@ -492,14 +500,14 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
         }
         try {
             if (Build.VERSION.SDK_INT >= 23 && parentFragment.getParentActivity().checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-                parentFragment.getParentActivity().requestPermissions(new String[]{Manifest.permission.CAMERA}, 20);
+                parentFragment.getParentActivity().requestPermissions(new String[]{Manifest.permission.CAMERA}, BasePermissionsActivity.REQUEST_CODE_OPEN_CAMERA);
                 return;
             }
             Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
             File image = AndroidUtilities.generatePicturePath();
             if (image != null) {
                 if (Build.VERSION.SDK_INT >= 24) {
-                    takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, FileProvider.getUriForFile(parentFragment.getParentActivity(), BuildConfig.APPLICATION_ID + ".provider", image));
+                    takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, FileProvider.getUriForFile(parentFragment.getParentActivity(), ApplicationLoader.getApplicationId() + ".provider", image));
                     takePictureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
                     takePictureIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 } else {
@@ -526,7 +534,7 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
             File video = AndroidUtilities.generateVideoPath();
             if (video != null) {
                 if (Build.VERSION.SDK_INT >= 24) {
-                    takeVideoIntent.putExtra(MediaStore.EXTRA_OUTPUT, FileProvider.getUriForFile(parentFragment.getParentActivity(), BuildConfig.APPLICATION_ID + ".provider", video));
+                    takeVideoIntent.putExtra(MediaStore.EXTRA_OUTPUT, FileProvider.getUriForFile(parentFragment.getParentActivity(), ApplicationLoader.getApplicationId() + ".provider", video));
                     takeVideoIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
                     takeVideoIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 } else if (Build.VERSION.SDK_INT >= 18) {
@@ -545,8 +553,13 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
     }
 
     public void onRequestPermissionsResultFragment(int requestCode, String[] permissions, int[] grantResults) {
-        if (requestCode == 17 && chatAttachAlert != null) {
-            chatAttachAlert.getPhotoLayout().checkCamera(false);
+        if (chatAttachAlert != null) {
+            if (requestCode == 17) {
+                chatAttachAlert.getPhotoLayout().checkCamera(false);
+                chatAttachAlert.getPhotoLayout().checkStorage();
+            } else if (requestCode == BasePermissionsActivity.REQUEST_CODE_EXTERNAL_STORAGE) {
+                chatAttachAlert.getPhotoLayout().checkStorage();
+            }
         }
     }
 
@@ -556,7 +569,7 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
         }
         if (Build.VERSION.SDK_INT >= 23 && parentFragment.getParentActivity() != null) {
             if (parentFragment.getParentActivity().checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                parentFragment.getParentActivity().requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 4);
+                parentFragment.getParentActivity().requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, BasePermissionsActivity.REQUEST_CODE_EXTERNAL_STORAGE_FOR_AVATAR);
                 return;
             }
         }
@@ -612,7 +625,7 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
         photoEntry.isVideo = isVideo;
         photoEntry.thumbPath = thumb;
         arrayList.add(photoEntry);
-        PhotoViewer.getInstance().setParentActivity(parentFragment.getParentActivity());
+        PhotoViewer.getInstance().setParentActivity(parentFragment);
         PhotoViewer.getInstance().openPhotoForSelect(arrayList, 0, PhotoViewer.SELECT_TYPE_AVATAR, false, new PhotoViewer.EmptyPhotoViewerProvider() {
             @Override
             public void sendButtonPressed(int index, VideoEditedInfo videoEditedInfo, boolean notify, int scheduleDate, boolean forceDocument) {
@@ -663,7 +676,8 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
                 }
                 currentPicturePath = null;
             } else if (requestCode == 13) {
-                PhotoViewer.getInstance().setParentActivity(parentFragment.getParentActivity());
+                parentFragment.getParentActivity().overridePendingTransition(R.anim.alpha_in, R.anim.alpha_out);
+                PhotoViewer.getInstance().setParentActivity(parentFragment);
                 int orientation = 0;
                 try {
                     ExifInterface ei = new ExifInterface(currentPicturePath);
@@ -710,7 +724,7 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
         smallPhoto = ImageLoader.scaleAndSaveImage(bitmap, 150, 150, 80, false, 150, 150);
         if (smallPhoto != null) {
             try {
-                Bitmap b = BitmapFactory.decodeFile(FileLoader.getPathToAttach(smallPhoto, true).getAbsolutePath());
+                Bitmap b = BitmapFactory.decodeFile(FileLoader.getInstance(currentAccount).getPathToAttach(smallPhoto, true).getAbsolutePath());
                 String key = smallPhoto.location.volume_id + "_" + smallPhoto.location.local_id + "@50_50";
                 ImageLoader.getInstance().putImageToCache(new BitmapDrawable(b), key, true);
             } catch (Throwable ignore) {
@@ -726,6 +740,7 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
                     convertingVideo = avatarObject;
                     long startTime = avatarObject.videoEditedInfo.startTime < 0 ? 0 : avatarObject.videoEditedInfo.startTime;
                     videoTimestamp = (avatarObject.videoEditedInfo.avatarStartTime - startTime) / 1000000.0;
+                    avatarObject.videoEditedInfo.shouldLimitFps = false;
                     NotificationCenter.getInstance(currentAccount).addObserver(ImageUpdater.this, NotificationCenter.filePreparingStarted);
                     NotificationCenter.getInstance(currentAccount).addObserver(ImageUpdater.this, NotificationCenter.filePreparingFailed);
                     NotificationCenter.getInstance(currentAccount).addObserver(ImageUpdater.this, NotificationCenter.fileNewChunkAvailable);
@@ -850,11 +865,11 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
 
                 Bitmap bitmap = SendMessagesHelper.createVideoThumbnailAtTime(finalPath, (long) (videoTimestamp * 1000), null, true);
                 if (bitmap != null) {
-                    File path = FileLoader.getPathToAttach(smallPhoto, true);
+                    File path = FileLoader.getInstance(currentAccount).getPathToAttach(smallPhoto, true);
                     if (path != null) {
                         path.delete();
                     }
-                    path = FileLoader.getPathToAttach(bigPhoto, true);
+                    path = FileLoader.getInstance(currentAccount).getPathToAttach(bigPhoto, true);
                     if (path != null) {
                         path.delete();
                     }
@@ -862,7 +877,7 @@ public class ImageUpdater implements NotificationCenter.NotificationCenterDelega
                     smallPhoto = ImageLoader.scaleAndSaveImage(bitmap, 150, 150, 80, false, 150, 150);
                     if (smallPhoto != null) {
                         try {
-                            Bitmap b = BitmapFactory.decodeFile(FileLoader.getPathToAttach(smallPhoto, true).getAbsolutePath());
+                            Bitmap b = BitmapFactory.decodeFile(FileLoader.getInstance(currentAccount).getPathToAttach(smallPhoto, true).getAbsolutePath());
                             String key = smallPhoto.location.volume_id + "_" + smallPhoto.location.local_id + "@50_50";
                             ImageLoader.getInstance().putImageToCache(new BitmapDrawable(b), key, true);
                         } catch (Throwable ignore) {

@@ -25,14 +25,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v2
       - name: Fetch Status
-        run: git submodule status TMessagesProj/jni/ffmpeg > ffmpeg_status
+        run: |
+          git submodule status TMessagesProj/jni/ffmpeg > ffmpeg_status
+          git submodule status TMessagesProj/jni/libvpx > libvpx_status
       - name: FFmpeg Cache
         id: cache
         uses: actions/cache@v2
         with:
           path: |
             TMessagesProj/jni/ffmpeg/build
-          key: ${{ hashFiles('ffmpeg_status', 'TMessagesProj/jni/*_ffmpeg.sh') }}
+            TMessagesProj/jni/libvpx/build
+          key: ${{ hashFiles('ffmpeg_status', 'libvpx_status', 'TMessagesProj/jni/*ffmpeg*.sh', 'TMessagesProj/jni/*libvpx*.sh', 'TMessagesProj/jni/patches/ffmpeg/*') }}
       - name: Setup Android SDK Tools
         uses: android-actions/setup-android@v2
         if: steps.cache.outputs.cache-hit != 'true'
@@ -45,6 +48,8 @@ jobs:
       - name: Native Build
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
+          sudo apt-get install yasm -y
+          ./run init libs libvpx
           ./run init libs ffmpeg
   boringssl:
     name: Native Build (BoringSSL)
@@ -94,6 +99,7 @@ jobs:
       - name: Fetch Status
         run: |
           git submodule status TMessagesProj/jni/ffmpeg > ffmpeg_status
+          git submodule status TMessagesProj/jni/libvpx > libvpx_status
           git submodule status TMessagesProj/jni/boringssl > boringssl_status
       - name: Native Cache
         id: cache
@@ -112,7 +118,8 @@ jobs:
         with:
           path: |
             TMessagesProj/jni/ffmpeg/build
-          key: ${{ hashFiles('ffmpeg_status', 'TMessagesProj/jni/*_ffmpeg.sh') }}
+            TMessagesProj/jni/libvpx/build
+          key: ${{ hashFiles('ffmpeg_status', 'libvpx_status', 'TMessagesProj/jni/*ffmpeg*.sh', 'TMessagesProj/jni/*libvpx*.sh', 'TMessagesProj/jni/patches/ffmpeg/*') }}
       - name: BoringSSL Cache
         uses: actions/cache@v2
         if: steps.cache.outputs.cache-hit != 'true'
@@ -134,11 +141,6 @@ jobs:
         run: |
           cd TMessagesProj/jni
           ./patch_boringssl.sh
-      - name: Native Build (libvpx)
-        if: (matrix.flavor == 'x86' || matrix.flavor == 'x86_64') && steps.cache.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get install yasm -y
-          ./run init libs libvpx_x86
       - name: Native Build
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -253,6 +255,11 @@ jobs:
         uses: actions/checkout@v2
       - name: Setup Android SDK Tools
         uses: android-actions/setup-android@v2
+      - name: Install NDK
+        run: |
+          echo "y" | sudo ${ANDROID_HOME}/tools/bin/sdkmanager --install "ndk;21.4.7075529" --sdk_root=${ANDROID_SDK_ROOT} &> /dev/null
+          echo "sdk.dir=${ANDROID_HOME}" > local.properties
+          echo "ndk.dir=${ANDROID_HOME}/ndk/21.4.7075529" >> local.properties
       - name: Fetch Status
         run: |
           git submodule status TMessagesProj/jni/ffmpeg > ffmpeg_status
@@ -306,7 +313,7 @@ jobs:
         run: |
           sed -i -e "s/16384/6144/g" gradle.properties
           echo "sdk.dir=${ANDROID_HOME}" >> local.properties
-          echo "ndk.dir=${ANDROID_HOME}/ndk-bundle" >> local.properties
+#          echo "ndk.dir=${ANDROID_HOME}/ndk-bundle" >> local.properties
       - name: Gradle cache
         uses: actions/cache@v2
         with:
@@ -350,6 +357,7 @@ jobs:
   build-dev:
     name: Gradle Build
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'pull_request' && success() }}
     needs:
       - native
       - v2ray
@@ -359,6 +367,11 @@ jobs:
         uses: actions/checkout@v2
       - name: Setup Android SDK Tools
         uses: android-actions/setup-android@v2
+      - name: Install NDK
+        run: |
+          echo "y" | sudo ${ANDROID_HOME}/tools/bin/sdkmanager --install "ndk;21.4.7075529" --sdk_root=${ANDROID_SDK_ROOT} &> /dev/null
+          echo "sdk.dir=${ANDROID_HOME}" > local.properties
+          echo "ndk.dir=${ANDROID_HOME}/ndk/21.4.7075529" >> local.properties
       - name: Fetch Status
         run: |
           git submodule status TMessagesProj/jni/ffmpeg > ffmpeg_status
@@ -366,23 +379,51 @@ jobs:
           git submodule status ss-rust/src/main/rust/shadowsocks-rust > shadowsocks_status
           git submodule status 'ssr-libev/*' > shadowsocksr_status
           git submodule status v2ray > v2ray_status
+      - name: Native Cache (armeabi-v7a)
+        uses: actions/cache@v2
+        with:
+          path: |
+            TMessagesProj/src/main/libs
+          key: ${{ hashFiles('TMessagesProj/jni/**', 'ffmpeg_status', 'boringssl_status') }}-armeabi-v7a
       - name: Native Cache (arm64-v8a)
         uses: actions/cache@v2
         with:
           path: |
             TMessagesProj/src/main/libs
           key: ${{ hashFiles('TMessagesProj/jni/**', 'ffmpeg_status', 'boringssl_status') }}-arm64-v8a
+      - name: Native Cache (x86)
+        uses: actions/cache@v2
+        with:
+          path: |
+            TMessagesProj/src/main/libs
+          key: ${{ hashFiles('TMessagesProj/jni/**', 'ffmpeg_status', 'boringssl_status') }}-x86
+      - name: Native Cache (x86_64)
+        uses: actions/cache@v2
+        with:
+          path: |
+            TMessagesProj/src/main/libs
+          key: ${{ hashFiles('TMessagesProj/jni/**', 'ffmpeg_status', 'boringssl_status') }}-x86_64
       - name: V2ray Cache
         uses: actions/cache@v2
         with:
           path: |
             TMessagesProj/libs/libv2ray.aar
           key: ${{ hashFiles('bin/libs/v2ray/*', 'v2ray_status') }}
+      - name: Build Cache
+        uses: actions/cache@v3
+        with:
+          path: |
+            TMessagesProj/build
+            TMessagesProj/.cxx
+            ss-rust/build
+            ssr-rust/build
+            openpgp-api/build
+          key: build-cache
       - name: Configure Gradle
         run: |
           sed -i -e "s/16384/6144/g" gradle.properties
           echo "sdk.dir=${ANDROID_HOME}" >> local.properties
-          echo "ndk.dir=${ANDROID_HOME}/ndk-bundle" >> local.properties
+#          echo "ndk.dir=${ANDROID_HOME}/ndk-bundle" >> local.properties
       - name: Gradle cache
         uses: actions/cache@v2
         with:
@@ -397,13 +438,18 @@ jobs:
         run: |
           export LOCAL_PROPERTIES="${{ secrets.LOCAL_PROPERTIES }}"
           export DEBUG_BUILD=true
-          export NATIVE_TARGET=arm64-v8a
           ./gradlew TMessagesProj:assembleMiniRelease
       - name: Send Build
         run: |
           chmod +x telegram-bot-api-binary
-          ./telegram-bot-api-binary --api-id=21724 --api-hash=3e0cb5efcd52300aec5994fdfc5bdc16 --local 2>&1 > /dev/null &
-          apk=$(find TMessagesProj/build/outputs/apk/mini/release -name '*arm64-v8a*.apk' | head -n 1)
+          function start() {
+            ./telegram-bot-api-binary --api-id=21724 --api-hash=3e0cb5efcd52300aec5994fdfc5bdc16 --local 2>&1 > /dev/null &
+          }
+          start
+          curl http://127.0.0.1:8081/ || start
+          curl http://127.0.0.1:8081/ || start
+          curl http://127.0.0.1:8081/ || start
+          apk=$(find TMessagesProj/build/outputs/apk/mini/release -name 'NekoX*.apk' | head -n 1)
           curl http://127.0.0.1:8081/bot${{ secrets.HELPER_BOT_TOKEN }}/sendDocument \
             -X POST \
             -F chat_id="${{ secrets.HELPER_BOT_TARGET }}" \

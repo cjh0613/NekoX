@@ -5,7 +5,6 @@ import android.os.Handler;
 import android.os.Message;
 import android.view.GestureDetector;
 import android.view.GestureDetector.OnDoubleTapListener;
-import android.view.GestureDetector.OnGestureListener;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
 import android.view.ViewConfiguration;
@@ -15,6 +14,7 @@ public class GestureDetectorFixDoubleTap {
         boolean isLongpressEnabled();
         boolean onTouchEvent(MotionEvent ev);
         void setIsLongpressEnabled(boolean enabled);
+        void setLongpressDuration(long duration);
         void setOnDoubleTapListener(OnDoubleTapListener listener);
     }
 
@@ -57,6 +57,7 @@ public class GestureDetectorFixDoubleTap {
         private float mDownFocusY;
 
         private boolean mIsLongpressEnabled;
+        private long mLongpressDuration = ViewConfiguration.getLongPressTimeout();
 
         /**
          * Determines speed during touch scrolling
@@ -172,6 +173,11 @@ public class GestureDetectorFixDoubleTap {
             mIsLongpressEnabled = isLongpressEnabled;
         }
 
+        @Override
+        public void setLongpressDuration(long duration) {
+            mLongpressDuration = duration;
+        }
+
         /**
          * @return true if longpress is enabled, else false.
          */
@@ -250,7 +256,7 @@ public class GestureDetectorFixDoubleTap {
                     break;
 
                 case MotionEvent.ACTION_DOWN:
-                    if (mDoubleTapListener != null) {
+                    if (mDoubleTapListener != null && mListener.hasDoubleTap()) {
                         boolean hadTapMessage = mHandler.hasMessages(TAP);
                         if (hadTapMessage) mHandler.removeMessages(TAP);
                         if ((mCurrentDownEvent != null) && (mPreviousUpEvent != null)
@@ -283,7 +289,7 @@ public class GestureDetectorFixDoubleTap {
                     if (mIsLongpressEnabled) {
                         mHandler.removeMessages(LONG_PRESS);
                         mHandler.sendEmptyMessageAtTime(LONG_PRESS, mCurrentDownEvent.getDownTime()
-                                + TAP_TIMEOUT + ViewConfiguration.getLongPressTimeout());
+                                + TAP_TIMEOUT + mLongpressDuration);
                     }
                     mHandler.sendEmptyMessageAtTime(SHOW_PRESS,
                             mCurrentDownEvent.getDownTime() + TAP_TIMEOUT);
@@ -427,35 +433,6 @@ public class GestureDetectorFixDoubleTap {
         }
     }
 
-    static class GestureDetectorCompatImplJellybeanMr2 implements GestureDetectorCompatImpl {
-        private final GestureDetector mDetector;
-
-        GestureDetectorCompatImplJellybeanMr2(Context context, OnGestureListener listener,
-                                              Handler handler) {
-            mDetector = new GestureDetector(context, listener, handler);
-        }
-
-        @Override
-        public boolean isLongpressEnabled() {
-            return mDetector.isLongpressEnabled();
-        }
-
-        @Override
-        public boolean onTouchEvent(MotionEvent ev) {
-            return mDetector.onTouchEvent(ev);
-        }
-
-        @Override
-        public void setIsLongpressEnabled(boolean enabled) {
-            mDetector.setIsLongpressEnabled(enabled);
-        }
-
-        @Override
-        public void setOnDoubleTapListener(OnDoubleTapListener listener) {
-            mDetector.setOnDoubleTapListener(listener);
-        }
-    }
-
     private final GestureDetectorCompatImpl mImpl;
 
     /**
@@ -517,6 +494,10 @@ public class GestureDetectorFixDoubleTap {
         mImpl.setIsLongpressEnabled(enabled);
     }
 
+    public void setLongpressDuration(long duration) {
+        mImpl.setLongpressDuration(duration);
+    }
+
     /**
      * Sets the listener which will be called for double-tap and related
      * gestures.
@@ -526,5 +507,11 @@ public class GestureDetectorFixDoubleTap {
      */
     public void setOnDoubleTapListener(OnDoubleTapListener listener) {
         mImpl.setOnDoubleTapListener(listener);
+    }
+
+    public static class OnGestureListener extends GestureDetector.SimpleOnGestureListener {
+        public boolean hasDoubleTap() {
+            return false;
+        }
     }
 }

@@ -4,13 +4,19 @@ import static tw.nekomimi.nekogram.utils.LangsKt.uDismiss;
 import static tw.nekomimi.nekogram.utils.LangsKt.uUpdate;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.text.TextUtils;
 import android.util.SparseArray;
 
 import org.telegram.SQLite.SQLiteCursor;
 import org.telegram.SQLite.SQLiteException;
+import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.BaseController;
+import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.FileLog;
+import org.telegram.messenger.MediaController;
 import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
@@ -20,6 +26,8 @@ import org.telegram.tgnet.NativeByteBuffer;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.AlertDialog;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -127,9 +135,9 @@ public class MessageHelper extends BaseController {
                     }
                 }
                 if (messageObject.messageOwner.media.photo instanceof TLRPC.TL_photo) {
-                    getSendMessagesHelper().sendMessage((TLRPC.TL_photo) messageObject.messageOwner.media.photo, null, did, null, null, messageObject.messageOwner.message, entities, null, params, notify, scheduleDate, 0, messageObject);
+                    getSendMessagesHelper().sendMessage((TLRPC.TL_photo) messageObject.messageOwner.media.photo, null, did, null, null, messageObject.messageOwner.message, entities, null, params, notify, scheduleDate, 0, messageObject, false);
                 } else if (messageObject.messageOwner.media.document instanceof TLRPC.TL_document) {
-                    getSendMessagesHelper().sendMessage((TLRPC.TL_document) messageObject.messageOwner.media.document, null, messageObject.messageOwner.attachPath, did, null, null, messageObject.messageOwner.message, entities, null, params, notify, scheduleDate, 0, messageObject, null);
+                    getSendMessagesHelper().sendMessage((TLRPC.TL_document) messageObject.messageOwner.media.document, null, messageObject.messageOwner.attachPath, did, null, null, messageObject.messageOwner.message, entities, null, params, notify, scheduleDate, 0, messageObject, null, false);
                 } else if (messageObject.messageOwner.media instanceof TLRPC.TL_messageMediaVenue || messageObject.messageOwner.media instanceof TLRPC.TL_messageMediaGeo) {
                     getSendMessagesHelper().sendMessage(messageObject.messageOwner.media, did, null, null, null, null, notify, scheduleDate);
                 } else if (messageObject.messageOwner.media.phone_number != null) {
@@ -149,7 +157,7 @@ public class MessageHelper extends BaseController {
                 if (messageObject.messageOwner.media instanceof TLRPC.TL_messageMediaWebPage) {
                     webPage = messageObject.messageOwner.media.webpage;
                 }
-                getSendMessagesHelper().sendMessage(messageObject.messageOwner.message, did, null, null, webPage, webPage != null, entities, null, null, notify, scheduleDate, null);
+                getSendMessagesHelper().sendMessage(messageObject.messageOwner.message, did, null, null, webPage, webPage != null, entities, null, null, notify, scheduleDate, null, false);
             } else if ((int) did != 0) {
                 ArrayList<MessageObject> arrayList = new ArrayList<>();
                 arrayList.add(messageObject);
@@ -346,6 +354,64 @@ public class MessageHelper extends BaseController {
             return null;
         }
         return ret;
+    }
+
+    public void saveStickerToGallery(Context context, MessageObject messageObject) {
+        if (messageObject.isAnimatedSticker()) return;
+        // Animated Sticker is not supported.
+
+        String path = messageObject.messageOwner.attachPath;
+        if (!TextUtils.isEmpty(path)) {
+            File temp = new File(path);
+            if (!temp.exists()) {
+                path = null;
+            }
+        }
+        if (TextUtils.isEmpty(path)) {
+            path = FileLoader.getInstance(currentAccount).getPathToMessage(messageObject.messageOwner).toString();
+            File temp = new File(path);
+            if (!temp.exists()) {
+                path = null;
+            }
+        }
+        if (TextUtils.isEmpty(path)) {
+            path = FileLoader.getInstance(currentAccount).getPathToAttach(messageObject.getDocument(), true).toString();
+        }
+        if (!TextUtils.isEmpty(path)) {
+            if (messageObject.isVideoSticker()) {
+                MediaController.saveFile(path, context, 1, null, null);
+            } else {
+                try {
+                    Bitmap image = BitmapFactory.decodeFile(path);
+                    FileOutputStream stream = new FileOutputStream(path + ".png");
+                    image.compress(Bitmap.CompressFormat.PNG, 100, stream);
+                    stream.close();
+                    MediaController.saveFile(path + ".png", context, 0, null, null);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            }
+        }
+    }
+
+    public void saveStickerToGallery(Context context, TLRPC.Document document) {
+        String path = FileLoader.getInstance(currentAccount).getPathToAttach(document, true).toString();
+
+        if (!TextUtils.isEmpty(path)) {
+            if (MessageObject.isVideoSticker(document)) {
+                MediaController.saveFile(path, context, 1, null, document.mime_type);
+            } else {
+                try {
+                    Bitmap image = BitmapFactory.decodeFile(path);
+                    FileOutputStream stream = new FileOutputStream(path + ".png");
+                    image.compress(Bitmap.CompressFormat.PNG, 100, stream);
+                    stream.close();
+                    MediaController.saveFile(path + ".png", context, 0, null, null);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            }
+        }
     }
 
 }

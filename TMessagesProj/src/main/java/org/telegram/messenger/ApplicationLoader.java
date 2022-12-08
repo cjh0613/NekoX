@@ -21,6 +21,8 @@ import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.res.Configuration;
 import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.os.Build;
 import android.os.Handler;
@@ -29,6 +31,9 @@ import android.os.SystemClock;
 import android.telephony.TelephonyManager;
 import android.util.Log;
 
+import androidx.annotation.NonNull;
+import androidx.multidex.MultiDex;
+
 import androidx.multidex.MultiDex;
 
 import org.telegram.messenger.voip.VideoCapturerDevice;
@@ -36,13 +41,13 @@ import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.ForegroundDetector;
+import org.telegram.ui.LauncherIconController;
 
 import java.io.File;
 import java.lang.reflect.Method;
 import java.util.HashSet;
 import java.util.LinkedList;
 
-import tw.nekomimi.nekogram.ExternalGcm;
 import tw.nekomimi.nekogram.NekoXConfig;
 import tw.nekomimi.nekogram.parts.SignturesKt;
 import tw.nekomimi.nekogram.utils.FileUtil;
@@ -60,6 +65,9 @@ public class ApplicationLoader extends Application {
 
     private static ConnectivityManager connectivityManager;
     private static volatile boolean applicationInited = false;
+    private static volatile  ConnectivityManager.NetworkCallback networkCallback;
+    private static long lastNetworkCheckTypeTime;
+    private static int lastKnownNetworkType = -1;
 
     public static long startTime;
 
@@ -71,8 +79,9 @@ public class ApplicationLoader extends Application {
     public static boolean canDrawOverlays;
     public static volatile long mainInterfacePausedStageQueueTime;
 
-    public static boolean hasPlayServices;
-
+    private static PushListenerController.IPushListenerServiceProvider pushProvider;
+    private static IMapsProvider mapsProvider;
+    private static ILocationServiceProvider locationServiceProvider;
 
     @Override
     protected void attachBaseContext(Context base) {
@@ -82,100 +91,35 @@ public class ApplicationLoader extends Application {
             applicationContext = getApplicationContext();
         } catch (Throwable ignore) {
         }
-        if (SDK_INT >= Build.VERSION_CODES.P) {
-            Reflection.unseal(base);
-        }
         Thread.currentThread().setUncaughtExceptionHandler((thread, error) -> {
             Log.e("nekox", "from " + thread.toString(), error);
         });
     }
 
-    /**
-     * @author weishu
-     * @date 2018/6/7.
-     */
-    public static class Reflection {
-        private static final String TAG = "Reflection";
-
-        private static Object sVmRuntime;
-        private static Method setHiddenApiExemptions;
-
-        static {
-            if (SDK_INT >= Build.VERSION_CODES.P) {
-                try {
-                    Method forName = Class.class.getDeclaredMethod("forName", String.class);
-                    Method getDeclaredMethod = Class.class.getDeclaredMethod("getDeclaredMethod", String.class, Class[].class);
-
-                    Class<?> vmRuntimeClass = (Class<?>) forName.invoke(null, "dalvik.system.VMRuntime");
-                    Method getRuntime = (Method) getDeclaredMethod.invoke(vmRuntimeClass, "getRuntime", null);
-                    setHiddenApiExemptions = (Method) getDeclaredMethod.invoke(vmRuntimeClass, "setHiddenApiExemptions", new Class[]{String[].class});
-                    sVmRuntime = getRuntime.invoke(null);
-                } catch (Throwable e) {
-                    FileLog.e("reflect bootstrap failed:", e);
-                }
-            }
-
+    public static ILocationServiceProvider getLocationServiceProvider() {
+        if (locationServiceProvider == null) {
+            locationServiceProvider = new GoogleLocationProvider();
+            locationServiceProvider.init(applicationContext);
         }
+        return locationServiceProvider;
+    }
 
-        private static int UNKNOWN = -9999;
-
-        private static final int ERROR_SET_APPLICATION_FAILED = -20;
-
-        private static final int ERROR_EXEMPT_FAILED = -21;
-
-        private static int unsealed = UNKNOWN;
-
-        public static int unseal(Context context) {
-            if (SDK_INT < 28) {
-                // Below Android P, ignore
-                return 0;
-            }
-
-            // try exempt API first.
-            if (exemptAll()) {
-                return 0;
-            } else {
-                return ERROR_EXEMPT_FAILED;
-            }
+    public static IMapsProvider getMapsProvider() {
+        if (mapsProvider == null) {
+            mapsProvider = new GoogleMapsProvider();
         }
+        return mapsProvider;
+    }
 
-        /**
-         * make the method exempted from hidden API check.
-         *
-         * @param method the method signature prefix.
-         * @return true if success.
-         */
-        public static boolean exempt(String method) {
-            return exempt(new String[]{method});
+    public static PushListenerController.IPushListenerServiceProvider getPushProvider() {
+        if (pushProvider == null) {
+            pushProvider = PushListenerController.getProvider();
         }
+        return pushProvider;
+    }
 
-        /**
-         * make specific methods exempted from hidden API check.
-         *
-         * @param methods the method signature prefix, such as "Ldalvik/system", "Landroid" or even "L"
-         * @return true if success
-         */
-        public static boolean exempt(String... methods) {
-            if (sVmRuntime == null || setHiddenApiExemptions == null) {
-                return false;
-            }
-
-            try {
-                setHiddenApiExemptions.invoke(sVmRuntime, new Object[]{methods});
-                return true;
-            } catch (Throwable e) {
-                return false;
-            }
-        }
-
-        /**
-         * Make all hidden API exempted.
-         *
-         * @return true if success.
-         */
-        public static boolean exemptAll() {
-            return exempt(new String[]{"L"});
-        }
+    public static String getApplicationId() {
+        return BuildConfig.APPLICATION_ID;
     }
 
     @SuppressLint("SdCardPath")
@@ -196,35 +140,27 @@ public class ApplicationLoader extends Application {
     }
 
     public static File getFilesDirFixed() {
-
         File filesDir = new File(getDataDirFixed(), "files");
-
         FileUtil.initDir(filesDir);
-
         return filesDir;
-
     }
 
     public static File getCacheDirFixed() {
-
         File filesDir = new File(getDataDirFixed(), "cache");
-
         FileUtil.initDir(filesDir);
-
         return filesDir;
-
     }
 
     public static void postInitApplication() {
-        if (applicationInited) {
+        if (applicationInited || applicationContext == null) {
             return;
         }
         applicationInited = true;
 
         SharedConfig.loadConfig();
+        LocaleController.getInstance();
+        SharedPrefsHelper.init(applicationContext);
         UserConfig.getInstance(0).loadConfig();
-
-        LinkedList<Runnable> postRun = new LinkedList<>();
 
         try {
             connectivityManager = (ConnectivityManager) ApplicationLoader.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -274,26 +210,27 @@ public class ApplicationLoader extends Application {
             e.printStackTrace();
         }
 
+        LinkedList<Runnable> postRun = new LinkedList<>();
         for (int a : SharedConfig.activeAccounts) {
             final int finalA = a;
             Runnable initRunnable = () -> loadAccount(finalA);
-            if (finalA == UserConfig.selectedAccount) initRunnable.run();
+            if (finalA == UserConfig.selectedAccount) {
+                initRunnable.run();
+                ChatThemeController.init();
+            }
             else postRun.add(initRunnable);
-        }
-
-        if (BuildVars.LOGS_ENABLED) {
-            FileLog.d("app initied");
         }
         for (Runnable runnable : postRun) {
             Utilities.stageQueue.postRunnable(runnable);
         }
-        Utilities.stageQueue.postRunnable(ExternalGcm::initPlayServices);
+        // init fcm
+        initPushServices();
+        if (BuildVars.LOGS_ENABLED) {
+            FileLog.d("app initied");
+        }
     }
 
-    private static final HashSet<Integer> loadedAccounts = new HashSet<>();
-
     public static void loadAccount(int account) {
-        if (!loadedAccounts.add(account)) return;
         UserConfig inst = UserConfig.getInstance(account);
         inst.loadConfig();
         if (!inst.isClientActivated()) {
@@ -303,7 +240,7 @@ public class ApplicationLoader extends Application {
         }
 
         MessagesController.getInstance(account);
-        if (account == 0) {
+        if ("".equals(SharedConfig.pushStringStatus)) {
             SharedConfig.pushStringStatus = "__FIREBASE_GENERATING_SINCE_" + ConnectionsManager.getInstance(account).getCurrentTime() + "__";
         } else {
             ConnectionsManager.getInstance(account);
@@ -313,13 +250,10 @@ public class ApplicationLoader extends Application {
             MessagesController.getInstance(account).putUser(user, true);
         }
         Utilities.stageQueue.postRunnable(() -> {
-            Theme.init(account);
             SendMessagesHelper.getInstance(account).checkUnsentMessages();
             ContactsController.getInstance(account).checkAppAccount();
             DownloadController.getInstance(account);
         });
-
-        ChatThemeController.init();
     }
 
     public ApplicationLoader() {
@@ -328,35 +262,22 @@ public class ApplicationLoader extends Application {
 
     @Override
     public void onCreate() {
-
         try {
             applicationContext = getApplicationContext();
         } catch (Throwable ignore) {
-        }
-
-        if (BuildVars.isPlay && ExternalGcm.checkSplit(this)) {
-            return; // Skip app initialization.
         }
 
         super.onCreate();
 
         if (BuildVars.LOGS_ENABLED) {
             FileLog.d("app start time = " + (startTime = SystemClock.elapsedRealtime()));
+            FileLog.d("buildVersion = " + BuildVars.BUILD_VERSION);
         }
         if (applicationContext == null) {
             applicationContext = getApplicationContext();
         }
 
-        // Since static init is thread-safe, no lock is needed there.
-        Utilities.stageQueue.postRunnable(() -> {
-            SignturesKt.checkMT(this);
-        });
-
-        try {
-            Class.forName("org.robolectric.android.internal.AndroidTestEnvironment");
-            return;
-        } catch (ClassNotFoundException ignored) {
-        }
+        Utilities.stageQueue.postRunnable(() -> SignturesKt.checkMT(this));
 
         NativeLoader.initNativeLibs(ApplicationLoader.applicationContext);
         ConnectionsManager.native_setJava(false);
@@ -379,16 +300,16 @@ public class ApplicationLoader extends Application {
         org.osmdroid.config.Configuration.getInstance().setUserAgentValue("Telegram-FOSS ( NekoX ) " + BuildConfig.VERSION_NAME);
         org.osmdroid.config.Configuration.getInstance().setOsmdroidBasePath(new File(ApplicationLoader.applicationContext.getCacheDir(), "osmdroid"));
 
-        startPushService();
-
+        LauncherIconController.tryFixLauncherIconIfNeeded();
     }
 
+    // Local Push Service, TFoss implementation
     public static void startPushService() {
         Utilities.stageQueue.postRunnable(ApplicationLoader::startPushServiceInternal);
     }
 
     private static void startPushServiceInternal() {
-        if (ExternalGcm.checkPlayServices()) {
+        if (PushListenerController.getProvider().hasServices()) {
             return;
         }
         SharedPreferences preferences = MessagesController.getNotificationsSettings(UserConfig.selectedAccount);
@@ -410,7 +331,7 @@ public class ApplicationLoader extends Application {
                     // Telegram-FOSS: unconditionally enable push service
                     AlarmManager am = (AlarmManager) applicationContext.getSystemService(Context.ALARM_SERVICE);
                     Intent i = new Intent(applicationContext, NotificationsService.class);
-                    pendingIntent = PendingIntent.getBroadcast(applicationContext, 0, i, 0);
+                    pendingIntent = PendingIntent.getBroadcast(applicationContext, 0, i, PendingIntent.FLAG_IMMUTABLE);
 
                     am.cancel(pendingIntent);
                     am.setInexactRepeating(AlarmManager.RTC_WAKEUP, System.currentTimeMillis(), 10 * 60 * 1000, pendingIntent);
@@ -429,13 +350,28 @@ public class ApplicationLoader extends Application {
         } else AndroidUtilities.runOnUIThread(() -> {
             applicationContext.stopService(new Intent(applicationContext, NotificationsService.class));
 
-            PendingIntent pintent = PendingIntent.getService(applicationContext, 0, new Intent(applicationContext, NotificationsService.class), 0);
-            AlarmManager alarm = (AlarmManager) applicationContext.getSystemService(Context.ALARM_SERVICE);
+            PendingIntent pintent = PendingIntent.getService(applicationContext, 0, new Intent(applicationContext, NotificationsService.class), PendingIntent.FLAG_MUTABLE);
+            AlarmManager alarm = (AlarmManager)applicationContext.getSystemService(Context.ALARM_SERVICE);
             alarm.cancel(pintent);
             if (pendingIntent != null) {
                 alarm.cancel(pendingIntent);
             }
         });
+    }
+
+    private static void initPushServices() {
+        AndroidUtilities.runOnUIThread(() -> {
+            if (getPushProvider().hasServices()) {
+                getPushProvider().onRequestPushToken();
+            } else {
+                if (BuildVars.LOGS_ENABLED) {
+                    FileLog.d("No valid " + getPushProvider().getLogTitle() + " APK found.");
+                }
+                SharedConfig.pushStringStatus = "__NO_GOOGLE_PLAY_SERVICES__";
+                PushListenerController.sendRegistrationToServer(getPushProvider().getPushType(), null);
+                startPushService();
+            }
+        }, 1000);
     }
 
     @Override
@@ -445,6 +381,7 @@ public class ApplicationLoader extends Application {
             LocaleController.getInstance().onDeviceConfigurationChange(newConfig);
             AndroidUtilities.checkDisplaySize(applicationContext, newConfig);
             VideoCapturerDevice.checkScreenCapturerSize();
+            AndroidUtilities.resetTabletFlag();
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -457,6 +394,22 @@ public class ApplicationLoader extends Application {
                     connectivityManager = (ConnectivityManager) ApplicationLoader.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE);
                 }
                 currentNetworkInfo = connectivityManager.getActiveNetworkInfo();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    if (networkCallback == null) {
+                        networkCallback = new ConnectivityManager.NetworkCallback() {
+                            @Override
+                            public void onAvailable(@NonNull Network network) {
+                                lastKnownNetworkType = -1;
+                            }
+
+                            @Override
+                            public void onCapabilitiesChanged(@NonNull Network network, @NonNull NetworkCapabilities networkCapabilities) {
+                                lastKnownNetworkType = -1;
+                            }
+                        };
+                        connectivityManager.registerDefaultNetworkCallback(networkCallback);
+                    }
+                }
             } catch (Throwable ignore) {
 
             }
@@ -526,11 +479,16 @@ public class ApplicationLoader extends Application {
                 return StatsController.TYPE_MOBILE;
             }
             if (currentNetworkInfo.getType() == ConnectivityManager.TYPE_WIFI || currentNetworkInfo.getType() == ConnectivityManager.TYPE_ETHERNET) {
-                if (connectivityManager.isActiveNetworkMetered()) {
-                    return StatsController.TYPE_MOBILE;
-                } else {
-                    return StatsController.TYPE_WIFI;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && (lastKnownNetworkType == StatsController.TYPE_MOBILE || lastKnownNetworkType == StatsController.TYPE_WIFI) && System.currentTimeMillis() - lastNetworkCheckTypeTime < 5000) {
+                    return lastKnownNetworkType;
                 }
+                if (connectivityManager.isActiveNetworkMetered()) {
+                    lastKnownNetworkType = StatsController.TYPE_MOBILE;
+                } else {
+                    lastKnownNetworkType = StatsController.TYPE_WIFI;
+                }
+                lastNetworkCheckTypeTime = System.currentTimeMillis();
+                return lastKnownNetworkType;
             }
             if (currentNetworkInfo.isRoaming()) {
                 return StatsController.TYPE_ROAMING;
@@ -612,4 +570,29 @@ public class ApplicationLoader extends Application {
         }
         return result;
     }
+
+//    public static void startAppCenter(Activity context) {
+//        applicationLoaderInstance.startAppCenterInternal(context);
+//    }
+//
+//    public static void checkForUpdates() {
+//        applicationLoaderInstance.checkForUpdatesInternal();
+//    }
+//
+//    public static void appCenterLog(Throwable e) {
+//        applicationLoaderInstance.appCenterLogInternal(e);
+//    }
+
+    protected void appCenterLogInternal(Throwable e) {
+
+    }
+
+    protected void checkForUpdatesInternal() {
+
+    }
+
+    protected void startAppCenterInternal(Activity context) {
+
+    }
+
 }

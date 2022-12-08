@@ -16,6 +16,9 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.DialogObject;
@@ -48,9 +51,6 @@ import org.telegram.ui.Components.RecyclerListView;
 
 import java.util.ArrayList;
 import java.util.Collections;
-
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.RecyclerView;
 
 public class FilterCreateActivity extends BaseFragment {
 
@@ -366,7 +366,7 @@ public class FilterCreateActivity extends BaseFragment {
                     AlertDialog progressDialog = null;
                     if (getParentActivity() != null) {
                         progressDialog = new AlertDialog(getParentActivity(), 3);
-                        progressDialog.setCanCacnel(false);
+                        progressDialog.setCanCancel(false);
                         progressDialog.show();
                     }
                     final AlertDialog progressDialogFinal = progressDialog;
@@ -587,7 +587,7 @@ public class FilterCreateActivity extends BaseFragment {
         AlertDialog progressDialog;
         if (progress) {
             progressDialog = new AlertDialog(fragment.getParentActivity(), 3);
-            progressDialog.setCanCacnel(false);
+            progressDialog.setCanCancel(false);
             progressDialog.show();
         } else {
             progressDialog = null;
@@ -957,7 +957,7 @@ public class FilterCreateActivity extends BaseFragment {
                             String status;
                             if (chat.participants_count != 0) {
                                 status = LocaleController.formatPluralString("Members", chat.participants_count);
-                            } else if (TextUtils.isEmpty(chat.username)) {
+                            } else if (!ChatObject.isPublic(chat)) {
                                 if (ChatObject.isChannel(chat) && !chat.megagroup) {
                                     status = LocaleController.getString("ChannelPrivate", R.string.ChannelPrivate);
                                 } else {
